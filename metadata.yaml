@@ -1,0 +1,8 @@
+name: astrbot_plugin_router
+display_name: 模型路由
+short_desc: 将不同用户路由到不同模型
+desc: 将不同用户路由到不同模型，闲聊者用反应快的模型，开发者用干活强的模型
+version: 1.1.0
+author: Zhalslar
+repo: https://github.com/Zhalslar/astrbot_plugin_router
+astrbot_version: ">=4.0.0"

@@ -1,0 +1,33 @@
+{
+  "entry_storage": {
+    "description": "模型路由配置",
+    "type": "template_list",
+    "hint": "给用户路由到指定模型",
+    "templates": {
+      "default": {
+        "name": "路由条目",
+        "items": {
+          "user_id": {
+            "description": "用户ID",
+            "hint": "用户的唯一标识",
+            "type": "string",
+            "default": ""
+          },
+          "enabled": {
+            "description": "启用",
+            "hint": "是否启用此条路由",
+            "type": "bool",
+            "default": true
+          },
+          "provider_id": {
+            "description": "LLM提供商",
+            "type": "string",
+            "default": "",
+            "hint": "定义要路由到的模型，留空或者填写的提供商不存在时，则不路由",
+            "_special": "select_provider"
+          }
+        }
+      }
+    }
+  }
+}
