@@ -19,6 +19,12 @@
             "type": "bool",
             "default": true
           },
+          "pattern": {
+            "description": "正则表达式",
+            "hint": "当用户消息匹配此正则时路由，默认为“^干活：”，留空则无条件路由",
+            "type": "string",
+            "default": "^干活："
+          },
           "provider_id": {
             "description": "LLM提供商",
             "type": "string",
