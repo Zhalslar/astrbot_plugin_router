@@ -4,12 +4,14 @@ from astrbot.api.message_components import At, Plain
 from astrbot.api.provider import Provider
 from astrbot.api.star import Context, Star
 
+from .core import DEFAULT_PATTERN, PluginConfig, RouteManager
+
 
 class RouterPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
-        self.config = config
-        self.entries = self.config.get("entry_storage", []) or []
+        self.plugin_config = PluginConfig(config)
+        self.manager = RouteManager(self.plugin_config)
 
     @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("添加路由")
@@ -52,32 +54,24 @@ class RouterPlugin(Star):
             )
             return
         provider_id = providers[index - 1].meta().id
-        entries = [
-            entry
-            for entry in self.entries
-            if not isinstance(entry, dict)
-            or str(entry.get("user_id") or "").strip() != target_id
-        ]
-        entries.append(
-            {
-                "__template_key": "default",
-                "user_id": target_id,
-                "enabled": True,
-                "provider_id": provider_id,
-            }
-        )
-        self.config["entry_storage"] = entries
+
         try:
-            self.config.save_config()
+            self.manager.set_user_route(
+                user_id=target_id,
+                provider_id=provider_id,
+                pattern=DEFAULT_PATTERN,
+                enabled=True,
+            )
         except Exception:
-            self.config["entry_storage"] = self.entries
             logger.exception(
                 "[router] Failed to save the route for user '%s'.", target_id
             )
             yield event.plain_result("路由保存失败，请检查日志后重试。")
             return
-        self.entries = entries
-        yield event.plain_result(f"已添加路由\n用户：{target_id}\n模型：{provider_id}")
+
+        yield event.plain_result(
+            f"已添加路由\n用户：{target_id}\n模型：{provider_id}\n触发正则：{DEFAULT_PATTERN}"
+        )
 
     @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("删除路由")
@@ -98,26 +92,19 @@ class RouterPlugin(Star):
             yield event.plain_result("命令格式：删除路由 @某人")
             return
 
-        entries = [
-            entry
-            for entry in self.entries
-            if not isinstance(entry, dict)
-            or str(entry.get("user_id") or "").strip() != target_id
-        ]
-        if len(entries) == len(self.entries):
-            yield event.plain_result(f"用户 {target_id} 没有配置路由。")
-            return
-        self.config["entry_storage"] = entries
         try:
-            self.config.save_config()
+            deleted = self.manager.delete_user_routes(target_id)
         except Exception:
-            self.config["entry_storage"] = self.entries
             logger.exception(
                 "[router] Failed to delete routes for user '%s'.", target_id
             )
             yield event.plain_result("路由删除失败，请检查日志后重试。")
             return
-        self.entries = entries
+
+        if not deleted:
+            yield event.plain_result(f"用户 {target_id} 没有配置路由。")
+            return
+
         yield event.plain_result(
             f"已删除用户 {target_id} 的全部路由，后续对话沿用 AstrBot 原有的模型选择。"
         )
@@ -133,32 +120,39 @@ class RouterPlugin(Star):
                     target_id = mentioned_id
                     break
 
-        status = "未配置启用的路由，沿用 AstrBot 原有的模型选择"
-        for entry in self.entries:
-            if not isinstance(entry, dict) or not entry.get("enabled", True):
-                continue
-            if str(entry.get("user_id") or "").strip() != target_id:
+        user_entries = self.manager.get_entries_by_user(target_id)
+        matched_entries = []
+        for entry in user_entries:
+            if not entry.enabled:
                 continue
 
-            provider_id = str(entry.get("provider_id") or "").strip()
+            provider_id = str(entry.provider_id or "").strip()
+            pattern = str(entry.pattern or "").strip()
+            pattern_display = f"触发正则：{pattern}" if pattern else "无正则限制（全匹配）"
+
             if not provider_id:
-                status = "路由提供商为空，沿用 AstrBot 原有的模型选择"
+                matched_entries.append(f"模型：未设置 ({pattern_display})")
             else:
                 provider = self.context.get_provider_by_id(provider_id)
                 if isinstance(provider, Provider):
-                    status = f"模型：{provider_id}"
-                else:
-                    status = (
-                        f"路由提供商：{provider_id}\n"
-                        "提供商不存在或不是对话模型，沿用 AstrBot 原有的模型选择。"
+                    matched_entries.append(
+                        f"模型：{provider_id} ({pattern_display})"
                     )
-            break
+                else:
+                    matched_entries.append(
+                        f"模型：{provider_id}（提供商不存在或无效）({pattern_display})"
+                    )
+
+        if not matched_entries:
+            status = "未配置启用的路由，沿用 AstrBot 原有的模型选择"
+        else:
+            status = "\n".join(matched_entries)
 
         yield event.plain_result(f"用户：{target_id}\n{status}")
 
     @filter.on_waiting_llm_request()
     async def on_waiting_llm(self, event: AstrMessageEvent) -> None:
-        """Apply the first enabled routing entry matching the sender.
+        """Apply the first enabled routing entry matching the sender and pattern.
 
         Args:
             event: Message event whose provider is about to be selected.
@@ -167,29 +161,26 @@ class RouterPlugin(Star):
         if not sender_id:
             return
 
-        for entry in self.entries:
-            if not isinstance(entry, dict) or not entry.get("enabled", True):
-                continue
-            if str(entry.get("user_id") or "").strip() != sender_id:
-                continue
+        msg_str = (event.get_message_str() or "").strip()
 
-            provider_id = str(entry.get("provider_id") or "").strip()
-            if not provider_id:
-                return
+        provider_id = self.manager.match_provider(sender_id, msg_str)
+        if not provider_id:
+            return
 
-            provider = self.context.get_provider_by_id(provider_id)
-            if not isinstance(provider, Provider):
-                logger.warning(
-                    "[router] Provider '%s' for user '%s' is missing or is not "
-                    "a chat provider; keeping the original provider selection.",
-                    provider_id,
-                    sender_id,
-                )
-                return
-
-            # Select a provider for this event without changing session preferences.
-            event.set_extra("selected_provider", provider_id)
-            logger.debug(
-                "[router] Routed user '%s' to provider '%s'.", sender_id, provider_id
+        provider = self.context.get_provider_by_id(provider_id)
+        if not isinstance(provider, Provider):
+            logger.warning(
+                "[router] Provider '%s' for user '%s' is missing or is not "
+                "a chat provider; keeping the original provider selection.",
+                provider_id,
+                sender_id,
             )
             return
+
+        # Select a provider for this event without changing session preferences.
+        event.set_extra("selected_provider", provider_id)
+        logger.debug(
+            "[router] Routed user '%s' to provider '%s'.",
+            sender_id,
+            provider_id,
+        )
