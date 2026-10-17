@@ -2,10 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from astrbot.api import logger
-
 from .config import PluginConfig
-from .entry import DEFAULT_PATTERN, RouteEntry
+from .entry import RouteEntry
 
 
 class RouteManager:
@@ -42,7 +40,7 @@ class RouteManager:
         self,
         user_id: str,
         provider_id: str,
-        pattern: str = DEFAULT_PATTERN,
+        pattern: str = "",
         enabled: bool = True,
     ) -> RouteEntry:
         """添加或替换用户的路由配置。"""
@@ -78,12 +76,8 @@ class RouteManager:
 
     def match_provider(self, sender_id: str, message: str) -> str | None:
         """按顺序匹配第一条命中的条目，返回对应 provider_id。"""
-        target = str(sender_id).strip()
-        if not target:
-            return None
-
         for entry in self.entries:
-            if entry.matches(target, message):
+            if entry.matches(sender_id, message):
                 provider_id = str(entry.provider_id or "").strip()
                 if provider_id:
                     return provider_id
