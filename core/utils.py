@@ -1,5 +1,3 @@
-import re
-
 from aiocqhttp import CQHttp
 
 from astrbot.api.event import AstrMessageEvent
